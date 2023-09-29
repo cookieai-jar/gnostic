@@ -597,10 +597,17 @@ func (g *OpenAPIv3Generator) buildOperationV3(
 		responses.ResponseOrReference = append(responses.ResponseOrReference, defaultResponse)
 	}
 
+	desc, err := parseDescription(description)
+	if err != nil {
+		log.Printf("Error parsing description text: %s %s %s", operationID, tagName, path)
+		log.Printf("Original text: ======\n%s\n======", description)
+	}
+
 	// Create the operation.
 	op := &v3.Operation{
 		Tags:        []string{tagName},
-		Description: description,
+		Summary:     desc.Summary,
+		Description: desc.Text,
 		OperationId: operationID,
 		Parameters:  parameters,
 		Responses:   responses,
