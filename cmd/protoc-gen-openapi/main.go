@@ -27,7 +27,10 @@ import (
 
 var flags flag.FlagSet
 
+var visibilityList generator.VisibilityArray
+
 func main() {
+	flags.Var(&visibilityList, "visibility", `visibility. options: 'public','preview','private'`)
 	conf := generator.Configuration{
 		Version:         flags.String("version", "0.0.1", "version number text, e.g. 1.2.3"),
 		Title:           flags.String("title", "", "name of the API"),
@@ -38,13 +41,16 @@ func main() {
 		CircularDepth:   flags.Int("depth", 2, "depth of recursion for circular messages"),
 		DefaultResponse: flags.Bool("default_response", true, `add default response. If "true", automatically adds a default response to operations which use the google.rpc.Status message. Useful if you use envoy or grpc-gateway to transcode as they use this type for their default error responses.`),
 		OutputMode:      flags.String("output_mode", "merged", `output generation mode. By default, a single openapi.yaml is generated at the out folder. Use "source_relative' to generate a separate '[inputfile].openapi.yaml' next to each '[inputfile].proto'.`),
+		Filename:        flags.String("filename", "openapi.yaml", `name of the output file. Default is "openapi.yaml"`),
 	}
-
 	opts := protogen.Options{
 		ParamFunc: flags.Set,
 	}
 
 	opts.Run(func(plugin *protogen.Plugin) error {
+		// slices need to be set here: flags.Var does not return the parsed slice
+		conf.Visibility = visibilityList
+
 		// Enable "optional" keyword in front of type (e.g. optional string label = 1;)
 		plugin.SupportedFeatures = uint64(pluginpb.CodeGeneratorResponse_FEATURE_PROTO3_OPTIONAL)
 		if *conf.OutputMode == "source_relative" {
@@ -52,7 +58,7 @@ func main() {
 				if !file.Generate {
 					continue
 				}
-				outfileName := strings.TrimSuffix(file.Desc.Path(), filepath.Ext(file.Desc.Path())) + ".openapi.yaml"
+				outfileName := strings.TrimSuffix(file.Desc.Path(), filepath.Ext(file.Desc.Path())) + "." + *conf.Filename
 				outputFile := plugin.NewGeneratedFile(outfileName, "")
 				gen := generator.NewOpenAPIv3Generator(plugin, conf, []*protogen.File{file})
 				if err := gen.Run(outputFile); err != nil {
@@ -60,7 +66,7 @@ func main() {
 				}
 			}
 		} else {
-			outputFile := plugin.NewGeneratedFile("openapi.yaml", "")
+			outputFile := plugin.NewGeneratedFile(*conf.Filename, "")
 			return generator.NewOpenAPIv3Generator(plugin, conf, plugin.Files).Run(outputFile)
 		}
 		return nil

@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"google.golang.org/genproto/googleapis/api/annotations"
+	"google.golang.org/genproto/googleapis/api/visibility"
 	status_pb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/proto"
@@ -33,6 +34,17 @@ import (
 	wk "github.com/google/gnostic/cmd/protoc-gen-openapi/generator/wellknown"
 	v3 "github.com/google/gnostic/openapiv3"
 )
+
+type VisibilityArray []string
+
+func (i *VisibilityArray) String() string {
+	return strings.Join(*i, ",")
+}
+
+func (i *VisibilityArray) Set(value string) error {
+	*i = append(*i, value)
+	return nil
+}
 
 type Configuration struct {
 	Version         *string
@@ -44,6 +56,8 @@ type Configuration struct {
 	CircularDepth   *int
 	DefaultResponse *bool
 	OutputMode      *string
+	Filename        *string
+	Visibility      VisibilityArray
 }
 
 const (
@@ -707,6 +721,11 @@ func (g *OpenAPIv3Generator) addOperationToDocumentV3(d *v3.Document, op *v3.Ope
 // addPathsToDocumentV3 adds paths from a specified file descriptor.
 func (g *OpenAPIv3Generator) addPathsToDocumentV3(d *v3.Document, services []*protogen.Service) {
 	for _, service := range services {
+		visible := matchVisibility(g.conf, service.Desc.Options(), visibility.E_ApiVisibility)
+		if !visible {
+			continue
+		}
+
 		annotationsCount := 0
 
 		for _, method := range service.Methods {
@@ -754,7 +773,8 @@ func (g *OpenAPIv3Generator) addPathsToDocumentV3(d *v3.Document, services []*pr
 					path = "unknown-unsupported"
 				}
 
-				if methodName != "" {
+				visible = matchVisibility(g.conf, method.Desc.Options(), visibility.E_MethodVisibility)
+				if visible && methodName != "" {
 					defaultHost := proto.GetExtension(service.Desc.Options(), annotations.E_DefaultHost).(string)
 
 					op, path2 := g.buildOperationV3(
@@ -912,4 +932,30 @@ func (g *OpenAPIv3Generator) addSchemasForMessagesToDocumentV3(d *v3.Document, m
 			},
 		})
 	}
+}
+
+func matchVisibility(conf Configuration, options protoreflect.ProtoMessage, xt protoreflect.ExtensionType) bool {
+	// By default, we assume show all if we receive no visibility selector arguments
+	if len(conf.Visibility) == 0 {
+		return true
+	}
+
+	// By default, we assume public if no rule is set
+	rule := proto.GetExtension(options, xt).(*visibility.VisibilityRule)
+	if rule == nil {
+		for _, selector := range conf.Visibility {
+			if selector == "PUBLIC" {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Otherwise, look for an explicit match
+	for _, selector := range conf.Visibility {
+		if rule.Restriction == selector {
+			return true
+		}
+	}
+	return false
 }
