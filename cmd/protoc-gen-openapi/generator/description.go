@@ -28,7 +28,7 @@ func parseDescription(text string) (*Description, error) {
 
 	importRoot, err := os.Getwd()
 	if err != nil {
-		return nil, errors.Wrap(err, "error determing working directory")
+		return nil, errors.Wrap(err, "error determining working directory")
 	}
 
 	testTemplate, err := template.New("description").Funcs(template.FuncMap{

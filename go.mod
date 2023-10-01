@@ -8,6 +8,7 @@ require (
 	github.com/golang/protobuf v1.5.3
 	github.com/google/gnostic-models v0.6.9-0.20230804172637-c7be7c783f49
 	github.com/google/go-cmp v0.5.9
+	github.com/pkg/errors v0.9.1
 	github.com/stoewer/go-strcase v1.2.0
 	golang.org/x/tools v0.6.0
 	google.golang.org/genproto v0.0.0-20230526161137-0005af68ea54 // indirect

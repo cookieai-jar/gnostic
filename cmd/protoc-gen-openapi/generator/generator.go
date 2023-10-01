@@ -306,6 +306,7 @@ func (g *OpenAPIv3Generator) _buildQueryParamsV3(field *protogen.Field, depths m
 
 	queryFieldName := g.reflect.formatFieldName(field.Desc)
 	fieldDescription := g.filterCommentString(field.Comments.Leading)
+	deprecated := isFieldDeprecated(field.Desc)
 
 	if field.Desc.IsMap() {
 		// Map types are not allowed in query parameteres
@@ -326,6 +327,7 @@ func (g *OpenAPIv3Generator) _buildQueryParamsV3(field *protogen.Field, depths m
 							Description: fieldDescription,
 							Required:    false,
 							Schema:      fieldSchema,
+							Deprecated:  deprecated,
 						},
 					},
 				})
@@ -345,6 +347,7 @@ func (g *OpenAPIv3Generator) _buildQueryParamsV3(field *protogen.Field, depths m
 							Description: fieldDescription,
 							Required:    false,
 							Schema:      fieldSchema,
+							Deprecated:  deprecated,
 						},
 					},
 				})
@@ -361,6 +364,7 @@ func (g *OpenAPIv3Generator) _buildQueryParamsV3(field *protogen.Field, depths m
 							Description: fieldDescription,
 							Required:    false,
 							Schema:      fieldSchema,
+							Deprecated:  deprecated,
 						},
 					},
 				})
@@ -376,6 +380,7 @@ func (g *OpenAPIv3Generator) _buildQueryParamsV3(field *protogen.Field, depths m
 							Description: fieldDescription,
 							Required:    false,
 							Schema:      fieldSchema,
+							Deprecated:  deprecated,
 						},
 					},
 				})
@@ -399,6 +404,7 @@ func (g *OpenAPIv3Generator) _buildQueryParamsV3(field *protogen.Field, depths m
 							Description: fieldDescription,
 							Required:    false,
 							Schema:      fieldSchema,
+							Deprecated:  deprecated,
 						},
 					},
 				})
@@ -439,6 +445,7 @@ func (g *OpenAPIv3Generator) _buildQueryParamsV3(field *protogen.Field, depths m
 						Description: fieldDescription,
 						Required:    false,
 						Schema:      fieldSchema,
+						Deprecated:  deprecated,
 					},
 				},
 			})
@@ -478,11 +485,13 @@ func (g *OpenAPIv3Generator) buildOperationV3(
 			// Add the path parameters to the operation parameters.
 			var fieldSchema *v3.SchemaOrReference
 
+			deprecated := false
 			var fieldDescription string
 			field := g.findField(pathParameter, inputMessage)
 			if field != nil {
 				fieldSchema = g.reflect.schemaOrReferenceForField(field.Desc)
 				fieldDescription = g.filterCommentString(field.Comments.Leading)
+				deprecated = isFieldDeprecated(field.Desc)
 			} else {
 				// If field does not exist, it is safe to set it to string, as it is ignored downstream
 				fieldSchema = &v3.SchemaOrReference{
@@ -503,6 +512,7 @@ func (g *OpenAPIv3Generator) buildOperationV3(
 							Description: fieldDescription,
 							Required:    true,
 							Schema:      fieldSchema,
+							Deprecated:  deprecated,
 						},
 					},
 				})
@@ -617,6 +627,8 @@ func (g *OpenAPIv3Generator) buildOperationV3(
 		log.Printf("Original text: ======\n%s\n======", description)
 	}
 
+	deprecated := isMessageDeprecated(inputMessage.Desc)
+
 	// Create the operation.
 	op := &v3.Operation{
 		Tags:        []string{tagName},
@@ -625,6 +637,7 @@ func (g *OpenAPIv3Generator) buildOperationV3(
 		OperationId: operationID,
 		Parameters:  parameters,
 		Responses:   responses,
+		Deprecated:  deprecated,
 	}
 
 	if defaultHost != "" {
@@ -726,6 +739,8 @@ func (g *OpenAPIv3Generator) addPathsToDocumentV3(d *v3.Document, services []*pr
 			continue
 		}
 
+		serviceDeprecated := isServiceDeprecated(service.Desc)
+
 		annotationsCount := 0
 
 		for _, method := range service.Methods {
@@ -779,6 +794,9 @@ func (g *OpenAPIv3Generator) addPathsToDocumentV3(d *v3.Document, services []*pr
 
 					op, path2 := g.buildOperationV3(
 						d, operationID, service.GoName, comment, defaultHost, path, body, inputMessage, outputMessage)
+					if serviceDeprecated {
+						op.Deprecated = true
+					}
 
 					// Merge any `Operation` annotations with the current
 					extOperation := proto.GetExtension(method.Desc.Options(), v3.E_Operation)
@@ -892,6 +910,7 @@ func (g *OpenAPIv3Generator) addSchemasForMessagesToDocumentV3(d *v3.Document, m
 				schema.Schema.Description = description
 				schema.Schema.ReadOnly = outputOnly
 				schema.Schema.WriteOnly = inputOnly
+				schema.Schema.Deprecated = isFieldDeprecated(field.Desc)
 
 				// Merge any `Property` annotations with the current
 				extProperty := proto.GetExtension(field.Desc.Options(), v3.E_Property)
