@@ -23,6 +23,7 @@ paths:
                   schema:
                     type: integer
                     format: enum
+                    x-proto-enum: tests.enumoptions.message.v1.Kind
             requestBody:
                 content:
                     application/json: {}
@@ -56,6 +57,7 @@ components:
                 kind:
                     type: integer
                     format: enum
+                    x-proto-enum: tests.enumoptions.message.v1.Kind
         Status:
             type: object
             properties:

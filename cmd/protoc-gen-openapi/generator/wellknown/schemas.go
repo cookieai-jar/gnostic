@@ -51,7 +51,16 @@ func NewNumberSchema(format string) *v3.SchemaOrReference {
 }
 
 func NewEnumSchema(enum_type *string, field protoreflect.FieldDescriptor) *v3.SchemaOrReference {
-	schema := &v3.Schema{Format: "enum"}
+	// Carry the proto enum's fully-qualified name as an OpenAPI extension so
+	// downstream tooling can identify inlined enums by type rather than by
+	// fingerprinting their value set.
+	schema := &v3.Schema{
+		Format: "enum",
+		SpecificationExtension: []*v3.NamedAny{{
+			Name:  "x-proto-enum",
+			Value: &v3.Any{Yaml: string(field.Enum().FullName())},
+		}},
+	}
 	if enum_type != nil && *enum_type == "string" {
 		schema.Type = "string"
 		schema.Enum = make([]*v3.Any, 0, field.Enum().Values().Len())

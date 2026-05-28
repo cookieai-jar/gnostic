@@ -27,6 +27,7 @@ paths:
                         - KIND_2
                     type: string
                     format: enum
+                    x-proto-enum: tests.enumoptions.message.v1.Kind
             requestBody:
                 content:
                     application/json: {}
@@ -64,6 +65,7 @@ components:
                         - KIND_2
                     type: string
                     format: enum
+                    x-proto-enum: tests.enumoptions.message.v1.Kind
         Status:
             type: object
             properties:
