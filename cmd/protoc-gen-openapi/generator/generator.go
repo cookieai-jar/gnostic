@@ -804,6 +804,16 @@ func (g *OpenAPIv3Generator) addPathsToDocumentV3(d *v3.Document, services []*pr
 						proto.Merge(op, extOperation.(*v3.Operation))
 					}
 
+					// Derive oauth2 security from the (auth).oauth2_scopes method option.
+					if scopes := oauth2Scopes(method.Desc.Options()); len(scopes) > 0 {
+						op.Security = []*v3.SecurityRequirement{{
+							AdditionalProperties: []*v3.NamedStringArray{{
+								Name:  oauth2SchemeName,
+								Value: &v3.StringArray{Value: scopes},
+							}},
+						}}
+					}
+
 					g.addOperationToDocumentV3(d, op, path2, methodName)
 				}
 			}

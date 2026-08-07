@@ -21,6 +21,46 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
+// oauth2SchemeName is the securitySchemes key that per-operation oauth2
+// requirements reference. The scheme itself is declared via the document
+// annotation on the proto (components.securitySchemes).
+const oauth2SchemeName = "oauth2Auth"
+
+// authExtensionNumber is the field number of the (auth) extension on
+// google.protobuf.MethodOptions. authScopesFieldNumber is the field number of
+// the oauth2_scopes string within the Auth message. Referencing by number
+// avoids a Go dependency on the definition module (which would be a cycle).
+const (
+	authExtensionNumber   protoreflect.FieldNumber = 4290001
+	authScopesFieldNumber protoreflect.FieldNumber = 1
+)
+
+// oauth2Scopes reads the comma-separated (auth).oauth2_scopes off a method's
+// options and returns the trimmed, non-empty scopes. The extension is resolved
+// by protogen from the input file set, so it is surfaced as a recognized field.
+func oauth2Scopes(opts protoreflect.ProtoMessage) []string {
+	if opts == nil {
+		return nil
+	}
+	var scopes []string
+	opts.ProtoReflect().Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
+		if !fd.IsExtension() || fd.Number() != authExtensionNumber {
+			return true
+		}
+		scopesField := v.Message().Descriptor().Fields().ByNumber(authScopesFieldNumber)
+		if scopesField == nil {
+			return false
+		}
+		for _, s := range strings.Split(v.Message().Get(scopesField).String(), ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				scopes = append(scopes, s)
+			}
+		}
+		return false
+	})
+	return scopes
+}
+
 // contains returns true if an array contains a specified string.
 func contains(s []string, e string) bool {
 	for _, a := range s {
