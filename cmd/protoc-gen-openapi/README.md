@@ -63,3 +63,36 @@ refers to additional .proto files in the same directory as
               schema:
                 $ref: '#/components/schemas/google.rpc.Status'
       ```
+9. `visibility`: `google.api.visibility` restriction to include, e.g. `PUBLIC`. Repeatable.
+   Filters services and methods, and therefore transitively the schemas they reach; it never filters a schema directly.
+   - **default**: none, which shows everything
+10. `output_mode`: output generation mode
+    - **default**: `merged`, a single file at the out folder
+    - `source_relative`: a separate `[inputfile].openapi.yaml` next to each `[inputfile].proto`
+11. `filename`: name of the output file
+    - **default**: `openapi.yaml`
+12. `include_schema`: fully-qualified proto **message** name to emit as a component schema even
+    though no operation references it. Repeatable. Messages the named one references are pulled in
+    transitively, so only the roots need listing.
+    - **default**: none
+    - Without it, a message reachable from no HTTP operation gets no schema — discovery walks
+      outward from service methods:
+      ```sh
+      protoc ... --openapi_opt=include_schema=example.v1.VendorConfig
+      ```
+    - Use the proto name, so a nested message is `pkg.Outer.Inner` (it is emitted under the schema
+      name `Outer_Inner`). A leading `.` is accepted.
+    - The declaring `.proto` must be in the compile set — passed to protoc/buf, or imported by
+      something that is. Otherwise the plugin never sees it and the build fails naming the message.
+    - Enums are out of scope: they are expanded inline at each reference site, never as components.
+      The same is true of `google.protobuf.Timestamp`, `Duration`, `Struct`, `FieldMask`, `Empty`,
+      the wrapper types, `google.type.Date`/`DateTime` and `google.api.HttpBody`, so requesting one
+      is an error rather than a contradictory second definition.
+    - Under `output_mode=source_relative` the schema is added only to the spec generated for the
+      file that declares it, not to every per-file spec.
+    - Pass the option once per message rather than comma-separating names: `protoc` splits
+      `--openapi_opt` on `,`, so a value may never contain one.
+
+`buf` users should set `strategy: all` for this plugin. With the default `strategy: directory` it is
+invoked once per directory, and in the default `merged` output mode each invocation overwrites the
+same `openapi.yaml`.

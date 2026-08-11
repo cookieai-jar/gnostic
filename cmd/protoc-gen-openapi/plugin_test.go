@@ -255,6 +255,171 @@ func TestOpenAPIStringEnums(t *testing.T) {
 	}
 }
 
+// includeSchemaPath is the example whose messages are deliberately unreachable
+// from any operation. It is kept out of openapiTests on purpose: each of the
+// table-driven tests above applies one fixed option set, none of which can carry
+// include_schema, and flipping GENERATE_FIXTURES would emit five fixtures for it
+// that no test ever reads.
+const includeSchemaPath = "examples/tests/includeschema/"
+
+func TestOpenAPIIncludeSchema(t *testing.T) {
+	tests := []struct {
+		name    string
+		opts    []string
+		fixture string
+	}{{
+		// The feature is opt-in: without it, only what the operation reaches.
+		name:    "Not requested",
+		opts:    []string{"naming=proto"},
+		fixture: "openapi.yaml",
+	}, {
+		// StandaloneChild is not requested; it arrives because Standalone
+		// references it.
+		name:    "Transitive",
+		opts:    []string{"naming=proto", "include_schema=tests.includeschema.message.v1.Standalone"},
+		fixture: "openapi_include_schema.yaml",
+	}, {
+		// The proto name of a nested message is Outer.Inner, not Outer_Inner.
+		name:    "Nested",
+		opts:    []string{"naming=proto", "include_schema=tests.includeschema.message.v1.Outer.Inner"},
+		fixture: "openapi_include_nested.yaml",
+	}, {
+		// The seeded name is the formatted one, so refs still resolve.
+		name:    "Fully qualified schema naming",
+		opts:    []string{"naming=proto", "fq_schema_naming=1", "include_schema=tests.includeschema.message.v1.Standalone"},
+		fixture: "openapi_include_fq_schema_naming.yaml",
+	}, {
+		// Two roots at once, and a leading dot is tolerated as in a proto type
+		// reference.
+		name: "Multiple",
+		opts: []string{
+			"naming=proto",
+			"include_schema=tests.includeschema.message.v1.Standalone",
+			"include_schema=.tests.includeschema.message.v1.Outer.Inner",
+		},
+		fixture: "openapi_include_multiple.yaml",
+	}}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := path.Join(includeSchemaPath, tt.fixture)
+			args := []string{
+				"-I", "../../",
+				"-I", "../../third_party",
+				"-I", "examples",
+				path.Join(includeSchemaPath, "message.proto"),
+				"--openapi_out=.",
+			}
+			for _, opt := range tt.opts {
+				args = append(args, "--openapi_opt="+opt)
+			}
+			if err := exec.Command("protoc", args...).Run(); err != nil {
+				t.Fatalf("protoc %v failed: %+v", strings.Join(args, " "), err)
+			}
+			if GENERATE_FIXTURES {
+				if err := CopyFixture(TEMP_FILE, fixture); err != nil {
+					t.Fatalf("Can't generate fixture: %+v", err)
+				}
+			} else if err := exec.Command("diff", TEMP_FILE, fixture).Run(); err != nil {
+				t.Fatalf("Diff failed: %+v", err)
+			}
+			os.Remove(TEMP_FILE)
+		})
+	}
+}
+
+func TestOpenAPIIncludeSchemaErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []string
+		want string
+	}{{
+		name: "Unknown message",
+		opts: []string{"include_schema=tests.includeschema.message.v1.NoSuchMessage"},
+		want: "no message named tests.includeschema.message.v1.NoSuchMessage in the compile set",
+	}, {
+		// Map entries are an implementation detail of map<> fields, not a
+		// nameable type.
+		name: "Map entry",
+		opts: []string{"include_schema=tests.includeschema.message.v1.Standalone.ChildrenEntry"},
+		want: "no message named tests.includeschema.message.v1.Standalone.ChildrenEntry in the compile set",
+	}, {
+		// Timestamp is expanded inline everywhere, so a component schema for it
+		// would contradict every use of it.
+		name: "Inline well-known type",
+		opts: []string{"include_schema=google.protobuf.Timestamp"},
+		want: "google.protobuf.Timestamp is expanded inline",
+	}}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := []string{
+				"-I", "../../",
+				"-I", "../../third_party",
+				"-I", "examples",
+				path.Join(includeSchemaPath, "message.proto"),
+				"--openapi_out=.",
+			}
+			for _, opt := range tt.opts {
+				args = append(args, "--openapi_opt="+opt)
+			}
+			// The existing tests use Run(), which discards stderr; here the
+			// message is the thing under test.
+			out, err := exec.Command("protoc", args...).CombinedOutput()
+			if err == nil {
+				os.Remove(TEMP_FILE)
+				t.Fatalf("protoc succeeded, want failure. Output:\n%s", out)
+			}
+			if !strings.Contains(string(out), tt.want) {
+				t.Fatalf("protoc error does not mention %q:\n%s", tt.want, out)
+			}
+		})
+	}
+}
+
+// TestOpenAPIIncludeSchemaSourceRelative checks that a forced schema lands only
+// in the spec for the file that declares it, rather than in every per-file spec.
+func TestOpenAPIIncludeSchemaSourceRelative(t *testing.T) {
+	tempDir := "tmp_include"
+	if err := os.MkdirAll(tempDir, os.ModePerm); err != nil {
+		t.Fatalf("create tmp directory %+v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	args := []string{
+		"-I", "../../",
+		"-I", "../../third_party",
+		"-I", "examples",
+		path.Join(includeSchemaPath, "message.proto"),
+		path.Join("examples/tests/bodymapping/", "message.proto"),
+		"--openapi_out=" + tempDir,
+		"--openapi_opt=naming=proto",
+		"--openapi_opt=output_mode=source_relative",
+		"--openapi_opt=include_schema=tests.includeschema.message.v1.Standalone",
+	}
+	if err := exec.Command("protoc", args...).Run(); err != nil {
+		t.Fatalf("protoc %v failed: %+v", strings.Join(args, " "), err)
+	}
+
+	// The output path mirrors the proto's canonical name, which "-I examples"
+	// strips down to "tests/<dir>/message.proto".
+	declaring, err := os.ReadFile(path.Join(tempDir, "tests/includeschema/message.openapi.yaml"))
+	if err != nil {
+		t.Fatalf("read declaring spec: %+v", err)
+	}
+	if !strings.Contains(string(declaring), "Standalone:") {
+		t.Errorf("declaring file's spec is missing the included schema:\n%s", declaring)
+	}
+
+	other, err := os.ReadFile(path.Join(tempDir, "tests/bodymapping/message.openapi.yaml"))
+	if err != nil {
+		t.Fatalf("read other spec: %+v", err)
+	}
+	if strings.Contains(string(other), "Standalone:") {
+		t.Errorf("included schema leaked into an unrelated file's spec:\n%s", other)
+	}
+}
+
 func TestOpenAPIDefaultResponse(t *testing.T) {
 	for _, tt := range openapiTests {
 		fixture := path.Join(tt.path, "openapi_default_response.yaml")

@@ -1,0 +1,58 @@
+// Copyright 2020 Google LLC.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
+syntax = "proto3";
+
+package tests.includeschema.message.v1;
+
+import "google/api/annotations.proto";
+
+option go_package = "github.com/google/gnostic/apps/protoc-gen-openapi/examples/tests/includeschema/message/v1;message";
+
+// Messaging service
+service Messaging {
+  rpc GetMessage(Message) returns (Message) {
+    option (google.api.http) = {
+      get : "/v1/messages/{message_id}"
+    };
+  }
+}
+
+message Message {
+  string message_id = 1;
+}
+
+// Standalone is reachable from no operation. Including it must also pull in
+// StandaloneChild, which it references but nothing else does.
+message Standalone {
+  string name = 1;
+  StandaloneChild child = 2;
+  map<string, StandaloneChild> children = 3;
+}
+
+// StandaloneChild is only ever reached through Standalone.
+message StandaloneChild {
+  string id = 1;
+}
+
+// Outer holds a nested message, whose proto name is Outer.Inner but whose
+// schema name is Outer_Inner.
+message Outer {
+  message Inner {
+    string value = 1;
+  }
+
+  Inner inner = 1;
+}

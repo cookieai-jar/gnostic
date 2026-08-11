@@ -122,11 +122,47 @@ func (r *OpenAPIv3Reflector) schemaReferenceForMessage(message protoreflect.Mess
 	return "#/components/schemas/" + schemaName
 }
 
+// inlineWellKnownTypes are the messages schemaOrReferenceForMessage expands
+// inline instead of emitting a component schema for. The keys mirror the switch
+// below one for one, leading dot included, so the two can be compared by eye —
+// a new case there needs a new entry here.
+//
+// google.protobuf.Value, google.protobuf.Any and google.rpc.Status are
+// deliberately absent: addSchemasForMessagesToDocumentV3 has real component
+// branches for those three, so they are referenceable.
+var inlineWellKnownTypes = map[string]bool{
+	".google.api.HttpBody":         true,
+	".google.protobuf.Timestamp":   true,
+	".google.protobuf.Duration":    true,
+	".google.type.Date":            true,
+	".google.type.DateTime":        true,
+	".google.protobuf.FieldMask":   true,
+	".google.protobuf.Struct":      true,
+	".google.protobuf.Empty":       true,
+	".google.protobuf.BoolValue":   true,
+	".google.protobuf.BytesValue":  true,
+	".google.protobuf.Int32Value":  true,
+	".google.protobuf.UInt32Value": true,
+	".google.protobuf.StringValue": true,
+	".google.protobuf.Int64Value":  true,
+	".google.protobuf.UInt64Value": true,
+	".google.protobuf.FloatValue":  true,
+	".google.protobuf.DoubleValue": true,
+}
+
+// isInlineWellKnownType reports whether the message named fullName is expanded
+// inline rather than referenced as a component. fullName is a plain proto full
+// name, without the leading dot that fullMessageTypeName produces.
+func isInlineWellKnownType(fullName string) bool {
+	return inlineWellKnownTypes["."+fullName]
+}
+
 // Returns a full schema for simple types, and a schema reference for complex types that reference
 // the definition in `#/components/schemas/`
 func (r *OpenAPIv3Reflector) schemaOrReferenceForMessage(message protoreflect.MessageDescriptor) *v3.SchemaOrReference {
 	typeName := r.fullMessageTypeName(message)
 
+	// Every case below must have a matching entry in inlineWellKnownTypes.
 	switch typeName {
 
 	case ".google.api.HttpBody":

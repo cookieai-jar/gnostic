@@ -29,8 +29,11 @@ var flags flag.FlagSet
 
 var visibilityList generator.VisibilityArray
 
+var includeSchemaList generator.StringArray
+
 func main() {
 	flags.Var(&visibilityList, "visibility", `visibility. options: 'public','preview','private'`)
+	flags.Var(&includeSchemaList, "include_schema", `fully-qualified proto message name to emit as a component schema even if no operation references it. Repeatable.`)
 	conf := generator.Configuration{
 		Version:         flags.String("version", "0.0.1", "version number text, e.g. 1.2.3"),
 		Title:           flags.String("title", "", "name of the API"),
@@ -50,6 +53,7 @@ func main() {
 	opts.Run(func(plugin *protogen.Plugin) error {
 		// slices need to be set here: flags.Var does not return the parsed slice
 		conf.Visibility = visibilityList
+		conf.IncludeSchemas = includeSchemaList
 
 		// Enable "optional" keyword in front of type (e.g. optional string label = 1;)
 		plugin.SupportedFeatures = uint64(pluginpb.CodeGeneratorResponse_FEATURE_PROTO3_OPTIONAL)
