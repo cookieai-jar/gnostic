@@ -35,16 +35,20 @@ import (
 	v3 "github.com/google/gnostic/openapiv3"
 )
 
-type VisibilityArray []string
+type StringArray []string
 
-func (i *VisibilityArray) String() string {
+func (i *StringArray) String() string {
 	return strings.Join(*i, ",")
 }
 
-func (i *VisibilityArray) Set(value string) error {
+func (i *StringArray) Set(value string) error {
 	*i = append(*i, value)
 	return nil
 }
+
+// VisibilityArray is the original name of StringArray, kept as an alias so
+// existing callers keep compiling.
+type VisibilityArray = StringArray
 
 type Configuration struct {
 	Version         *string
@@ -58,6 +62,7 @@ type Configuration struct {
 	OutputMode      *string
 	Filename        *string
 	Visibility      VisibilityArray
+	IncludeSchemas  StringArray
 }
 
 const (
@@ -100,7 +105,10 @@ func NewOpenAPIv3Generator(plugin *protogen.Plugin, conf Configuration, inputFil
 
 // Run runs the generator.
 func (g *OpenAPIv3Generator) Run(outputFile *protogen.GeneratedFile) error {
-	d := g.buildDocumentV3()
+	d, err := g.buildDocumentV3()
+	if err != nil {
+		return err
+	}
 	bytes, err := d.YAMLValue("Generated with protoc-gen-openapi\n" + infoURL)
 	if err != nil {
 		return fmt.Errorf("failed to marshal yaml: %s", err.Error())
@@ -112,7 +120,7 @@ func (g *OpenAPIv3Generator) Run(outputFile *protogen.GeneratedFile) error {
 }
 
 // buildDocumentV3 builds an OpenAPIv3 document for a plugin request.
-func (g *OpenAPIv3Generator) buildDocumentV3() *v3.Document {
+func (g *OpenAPIv3Generator) buildDocumentV3() (*v3.Document, error) {
 	d := &v3.Document{}
 
 	d.Openapi = "3.0.3"
@@ -144,6 +152,14 @@ func (g *OpenAPIv3Generator) buildDocumentV3() *v3.Document {
 		}
 	}
 
+	// Seed any schemas the caller asked for explicitly. They are indistinguishable
+	// from a reference discovered above, so the loop below picks them up — and
+	// pulls in their transitive references — without any further special casing.
+	seeded, err := g.seedIncludedSchemas()
+	if err != nil {
+		return nil, err
+	}
+
 	// While we have required schemas left to generate, go through the files again
 	// looking for the related message and adding them to the document if required.
 	for len(g.reflect.requiredSchemas) > 0 {
@@ -152,6 +168,10 @@ func (g *OpenAPIv3Generator) buildDocumentV3() *v3.Document {
 			g.addSchemasForMessagesToDocumentV3(d, file.Messages)
 		}
 		g.reflect.requiredSchemas = g.reflect.requiredSchemas[count:len(g.reflect.requiredSchemas)]
+	}
+
+	if err := g.checkIncludedSchemasGenerated(seeded); err != nil {
+		return nil, err
 	}
 
 	// If there is only 1 service, then use it's title for the
@@ -254,7 +274,7 @@ func (g *OpenAPIv3Generator) buildDocumentV3() *v3.Document {
 		})
 		d.Components.Schemas.AdditionalProperties = pairs
 	}
-	return d
+	return d, nil
 }
 
 // filterCommentString removes linter rules from comments.
