@@ -80,9 +80,13 @@ type OpenAPIv3Generator struct {
 	conf   Configuration
 	plugin *protogen.Plugin
 
-	inputFiles        []*protogen.File
-	reflect           *OpenAPIv3Reflector
-	generatedSchemas  []string // Names of schemas that have already been generated.
+	inputFiles       []*protogen.File
+	reflect          *OpenAPIv3Reflector
+	generatedSchemas []string // Names of schemas that have already been generated.
+
+	// Proto name of the message each generated schema name was built from.
+	generatedSchemaOwners map[string]string
+
 	linterRulePattern *regexp.Regexp
 	pathPattern       *regexp.Regexp
 	namedPathPattern  *regexp.Regexp
@@ -94,9 +98,11 @@ func NewOpenAPIv3Generator(plugin *protogen.Plugin, conf Configuration, inputFil
 		conf:   conf,
 		plugin: plugin,
 
-		inputFiles:        inputFiles,
-		reflect:           NewOpenAPIv3Reflector(conf),
-		generatedSchemas:  make([]string, 0),
+		inputFiles:            inputFiles,
+		reflect:               NewOpenAPIv3Reflector(conf),
+		generatedSchemas:      make([]string, 0),
+		generatedSchemaOwners: make(map[string]string),
+
 		linterRulePattern: regexp.MustCompile(`\(-- .* --\)`),
 		pathPattern:       regexp.MustCompile("{([^=}]+)}"),
 		namedPathPattern:  regexp.MustCompile("{(.+)=(.+)}"),
@@ -618,11 +624,11 @@ func (g *OpenAPIv3Generator) buildOperationV3(
 	if *g.conf.DefaultResponse {
 		anySchemaName := g.reflect.formatMessageName(anyProtoDesc)
 		anySchema := wk.NewGoogleProtobufAnySchema(anySchemaName)
-		g.addSchemaToDocumentV3(d, anySchema)
+		g.addSchemaToDocumentV3(d, anySchema, anyProtoDesc.FullName())
 
 		statusSchemaName := g.reflect.formatMessageName(statusProtoDesc)
 		statusSchema := wk.NewGoogleRpcStatusSchema(statusSchemaName, anySchemaName)
-		g.addSchemaToDocumentV3(d, statusSchema)
+		g.addSchemaToDocumentV3(d, statusSchema, statusProtoDesc.FullName())
 
 		defaultResponse := &v3.NamedResponseOrReference{
 			Name: "default",
@@ -837,11 +843,12 @@ func (g *OpenAPIv3Generator) addPathsToDocumentV3(d *v3.Document, services []*pr
 }
 
 // addSchemaForMessageToDocumentV3 adds the schema to the document if required
-func (g *OpenAPIv3Generator) addSchemaToDocumentV3(d *v3.Document, schema *v3.NamedSchemaOrReference) {
+func (g *OpenAPIv3Generator) addSchemaToDocumentV3(d *v3.Document, schema *v3.NamedSchemaOrReference, owner protoreflect.FullName) {
 	if contains(g.generatedSchemas, schema.Name) {
 		return
 	}
 	g.generatedSchemas = append(g.generatedSchemas, schema.Name)
+	g.generatedSchemaOwners[schema.Name] = string(owner)
 	d.Components.Schemas.AdditionalProperties = append(d.Components.Schemas.AdditionalProperties, schema)
 }
 
@@ -861,21 +868,29 @@ func (g *OpenAPIv3Generator) addSchemasForMessagesToDocumentV3(d *v3.Document, m
 			continue
 		}
 
+		// A schema name is required on behalf of one particular message. Another
+		// that merely formats alike must not take the name from it: the walk
+		// covers the whole compile set, so without this the message reached
+		// first wins and every reference to the name resolves to it.
+		if owner, ok := g.reflect.requiredSchemaOwners[schemaName]; ok && owner != string(message.Desc.FullName()) {
+			continue
+		}
+
 		typeName := g.reflect.fullMessageTypeName(message.Desc)
 		messageDescription := g.filterCommentString(message.Comments.Leading)
 
 		// `google.protobuf.Value` and `google.protobuf.Any` have special JSON transcoding
 		// so we can't just reflect on the message descriptor.
 		if typeName == ".google.protobuf.Value" {
-			g.addSchemaToDocumentV3(d, wk.NewGoogleProtobufValueSchema(schemaName))
+			g.addSchemaToDocumentV3(d, wk.NewGoogleProtobufValueSchema(schemaName), message.Desc.FullName())
 			continue
 		} else if typeName == ".google.protobuf.Any" {
-			g.addSchemaToDocumentV3(d, wk.NewGoogleProtobufAnySchema(schemaName))
+			g.addSchemaToDocumentV3(d, wk.NewGoogleProtobufAnySchema(schemaName), message.Desc.FullName())
 			continue
 		} else if typeName == ".google.rpc.Status" {
 			anySchemaName := g.reflect.formatMessageName(anyProtoDesc)
-			g.addSchemaToDocumentV3(d, wk.NewGoogleProtobufAnySchema(anySchemaName))
-			g.addSchemaToDocumentV3(d, wk.NewGoogleRpcStatusSchema(schemaName, anySchemaName))
+			g.addSchemaToDocumentV3(d, wk.NewGoogleProtobufAnySchema(anySchemaName), anyProtoDesc.FullName())
+			g.addSchemaToDocumentV3(d, wk.NewGoogleRpcStatusSchema(schemaName, anySchemaName), message.Desc.FullName())
 			continue
 		}
 
@@ -969,7 +984,7 @@ func (g *OpenAPIv3Generator) addSchemasForMessagesToDocumentV3(d *v3.Document, m
 					Schema: schema,
 				},
 			},
-		})
+		}, message.Desc.FullName())
 	}
 }
 

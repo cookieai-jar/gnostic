@@ -89,7 +89,16 @@ refers to additional .proto files in the same directory as
       the wrapper types, `google.type.Date`/`DateTime` and `google.api.HttpBody`, so requesting one
       is an error rather than a contradictory second definition.
     - Under `output_mode=source_relative` the schema is added only to the spec generated for the
-      file that declares it, not to every per-file spec.
+      file that declares it, not to every per-file spec. That mode therefore needs the declaring
+      `.proto` to be one protoc generates for: a message reachable only as an import has no spec to
+      go in, and is an error rather than a silent omission. Merged output has no such restriction.
+    - Schemas are keyed by name, so requesting a message whose schema name another emitted message
+      also formats to is an error: only one definition can live under that name, and it would not
+      reliably be the one asked for. `fq_schema_naming=true` prefixes the package and resolves it.
+      The clash is judged per output document, so under `output_mode=source_relative` two such
+      messages are fine as long as they are declared in different files. With `default_response`
+      on, `google.rpc.Status` and `google.protobuf.Any` already hold their own schema names, so a
+      message formatting to one of those clashes with them.
     - Pass the option once per message rather than comma-separating names: `protoc` splits
       `--openapi_opt` on `,`, so a value may never contain one.
 
