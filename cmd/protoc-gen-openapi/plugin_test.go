@@ -332,7 +332,9 @@ func TestOpenAPIIncludeSchemaErrors(t *testing.T) {
 	tests := []struct {
 		name string
 		opts []string
-		want string
+		// Protos to compile, in order; message.proto alone when unset.
+		protos []string
+		want   string
 	}{{
 		name: "Unknown message",
 		opts: []string{"include_schema=tests.includeschema.message.v1.NoSuchMessage"},
@@ -349,16 +351,68 @@ func TestOpenAPIIncludeSchemaErrors(t *testing.T) {
 		name: "Inline well-known type",
 		opts: []string{"include_schema=google.protobuf.Timestamp"},
 		want: "google.protobuf.Timestamp is expanded inline",
+	}, {
+		// collision.proto's Standalone is reached from an operation and formats
+		// to the same schema name. Emitting the requested one is impossible: the
+		// walk matches by name, so the document would keep whichever message it
+		// reached first under that name.
+		name:   "Cross-package name collision",
+		opts:   []string{"naming=proto", "include_schema=tests.includeschema.message.v1.Standalone"},
+		protos: []string{"message.proto", "collision.proto"},
+		want:   `both map to schema name "Standalone"`,
+	}, {
+		// fieldcollision.proto reaches its Standalone through a field, so the
+		// name is unclaimed when the schema is seeded and the collision only
+		// surfaces while the schemas are being generated.
+		name:   "Name collision discovered while generating",
+		opts:   []string{"naming=proto", "include_schema=tests.includeschema.message.v1.Standalone"},
+		protos: []string{"fieldcollision.proto", "message.proto"},
+		want:   `tests.includeschema.message.v1.Standalone and tests.includeschema.fieldcollision.v1.Standalone both map to schema name "Standalone"`,
+	}, {
+		// Same clash with the protos the other way round: which message the
+		// generation walk happens to reach first must not decide whether the
+		// request is reported as impossible.
+		name:   "Name collision discovered while generating, reversed",
+		opts:   []string{"naming=proto", "include_schema=tests.includeschema.message.v1.Standalone"},
+		protos: []string{"message.proto", "fieldcollision.proto"},
+		want:   `tests.includeschema.message.v1.Standalone and tests.includeschema.fieldcollision.v1.Standalone both map to schema name "Standalone"`,
+	}, {
+		// Both Standalones are requested outright, and merged output puts them in
+		// one document. fieldcollision's is reached only through a field, so no
+		// operation has claimed the name yet and the request set collides with
+		// itself. Sorted names make which one is reported deterministic.
+		name: "Two requested messages share a schema name",
+		opts: []string{
+			"naming=proto",
+			"include_schema=tests.includeschema.message.v1.Standalone",
+			"include_schema=tests.includeschema.fieldcollision.v1.Standalone",
+		},
+		protos: []string{"message.proto", "fieldcollision.proto"},
+		want:   `both map to schema name "Standalone"`,
+	}, {
+		// The default error response emits google.rpc.Status under the schema
+		// name "Status" before the schemas are walked at all, so a requested
+		// message of that name can never get it.
+		name:   "Name taken by the default error response",
+		opts:   []string{"naming=proto", "include_schema=tests.includeschema.statusname.v1.Status"},
+		protos: []string{"statusname.proto"},
+		want:   `schema "Status" was generated from google.rpc.Status, not the requested tests.includeschema.statusname.v1.Status`,
 	}}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			protos := tt.protos
+			if protos == nil {
+				protos = []string{"message.proto"}
+			}
 			args := []string{
 				"-I", "../../",
 				"-I", "../../third_party",
 				"-I", "examples",
-				path.Join(includeSchemaPath, "message.proto"),
 				"--openapi_out=.",
+			}
+			for _, proto := range protos {
+				args = append(args, path.Join(includeSchemaPath, proto))
 			}
 			for _, opt := range tt.opts {
 				args = append(args, "--openapi_opt="+opt)
@@ -375,6 +429,120 @@ func TestOpenAPIIncludeSchemaErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestOpenAPIIncludeSchemaCollisionDisambiguated checks the remedy the collision
+// error points at: with fq_schema_naming the two Standalone messages no longer
+// share a schema name, so the requested one can be emitted alongside the other.
+func TestOpenAPIIncludeSchemaCollisionDisambiguated(t *testing.T) {
+	args := []string{
+		"-I", "../../",
+		"-I", "../../third_party",
+		"-I", "examples",
+		path.Join(includeSchemaPath, "message.proto"),
+		path.Join(includeSchemaPath, "collision.proto"),
+		"--openapi_out=.",
+		"--openapi_opt=naming=proto",
+		"--openapi_opt=fq_schema_naming=1",
+		"--openapi_opt=include_schema=tests.includeschema.message.v1.Standalone",
+	}
+	out, err := exec.Command("protoc", args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("protoc %v failed: %+v\n%s", strings.Join(args, " "), err, out)
+	}
+	defer os.Remove(TEMP_FILE)
+
+	document, err := os.ReadFile(TEMP_FILE)
+	if err != nil {
+		t.Fatalf("read generated spec: %+v", err)
+	}
+	for _, want := range []string{
+		"tests.includeschema.message.v1.Standalone:",
+		"tests.includeschema.collision.v1.Standalone:",
+	} {
+		if !strings.Contains(string(document), want) {
+			t.Errorf("generated spec is missing %q:\n%s", want, document)
+		}
+	}
+}
+
+// TestOpenAPIIncludeSchemaImportOnly covers a message declared in a .proto that
+// is present only as an import. Merged mode reaches the whole compile set and
+// emits it; source_relative emits a spec per generated file, so there is none
+// that the declaring file owns and the request has to fail rather than be
+// dropped.
+func TestOpenAPIIncludeSchemaImportOnly(t *testing.T) {
+	const detached = "include_schema=tests.includeschema.imported.v1.Detached"
+	importer := path.Join(includeSchemaPath, "importer.proto")
+	imported := path.Join(includeSchemaPath, "imported.proto")
+
+	tempDir := "tmp_import_only"
+	if err := os.MkdirAll(tempDir, os.ModePerm); err != nil {
+		t.Fatalf("create tmp directory %+v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	run := func(t *testing.T, outDir string, extra ...string) ([]byte, error) {
+		if err := os.MkdirAll(outDir, os.ModePerm); err != nil {
+			t.Fatalf("create out directory %+v", err)
+		}
+		args := append([]string{
+			"-I", "../../",
+			"-I", "../../third_party",
+			"-I", "examples",
+			"--openapi_out=" + outDir,
+			"--openapi_opt=naming=proto",
+			"--openapi_opt=" + detached,
+		}, extra...)
+		return exec.Command("protoc", args...).CombinedOutput()
+	}
+
+	t.Run("Merged", func(t *testing.T) {
+		outDir := path.Join(tempDir, "merged")
+		out, err := run(t, outDir, importer)
+		if err != nil {
+			t.Fatalf("protoc failed: %+v\n%s", err, out)
+		}
+		document, err := os.ReadFile(path.Join(outDir, TEMP_FILE))
+		if err != nil {
+			t.Fatalf("read generated spec: %+v", err)
+		}
+		if !strings.Contains(string(document), "Detached:") {
+			t.Errorf("spec is missing the imported message:\n%s", document)
+		}
+	})
+
+	t.Run("Source relative", func(t *testing.T) {
+		out, err := run(t, path.Join(tempDir, "sr"), importer, "--openapi_opt=output_mode=source_relative")
+		if err == nil {
+			t.Fatalf("protoc succeeded, want failure. Output:\n%s", out)
+		}
+		for _, want := range []string{
+			"tests/includeschema/imported.proto",
+			"protoc was not asked to generate for",
+		} {
+			if !strings.Contains(string(out), want) {
+				t.Errorf("protoc error does not mention %q:\n%s", want, out)
+			}
+		}
+	})
+
+	// The remedy the error points at: once the declaring file is generated for,
+	// it has a spec of its own to hold the schema.
+	t.Run("Source relative with the declaring file", func(t *testing.T) {
+		outDir := path.Join(tempDir, "sr_both")
+		out, err := run(t, outDir, importer, imported, "--openapi_opt=output_mode=source_relative")
+		if err != nil {
+			t.Fatalf("protoc failed: %+v\n%s", err, out)
+		}
+		document, err := os.ReadFile(path.Join(outDir, "tests/includeschema/imported.openapi.yaml"))
+		if err != nil {
+			t.Fatalf("read declaring file's spec: %+v", err)
+		}
+		if !strings.Contains(string(document), "Detached:") {
+			t.Errorf("declaring file's spec is missing the included schema:\n%s", document)
+		}
+	})
 }
 
 // TestOpenAPIIncludeSchemaSourceRelative checks that a forced schema lands only
@@ -417,6 +585,158 @@ func TestOpenAPIIncludeSchemaSourceRelative(t *testing.T) {
 	}
 	if strings.Contains(string(other), "Standalone:") {
 		t.Errorf("included schema leaked into an unrelated file's spec:\n%s", other)
+	}
+}
+
+// TestOpenAPIIncludeSchemaSourceRelativeCollision checks that two requested
+// messages sharing a schema name are not a collision when they are declared in
+// different files: source_relative gives each its own spec, so each definition
+// gets the name to itself. An unrelated third target, which seeds nothing, must
+// come through untouched rather than be failed along with them.
+func TestOpenAPIIncludeSchemaSourceRelativeCollision(t *testing.T) {
+	tempDir := "tmp_include_collision"
+	if err := os.MkdirAll(tempDir, os.ModePerm); err != nil {
+		t.Fatalf("create tmp directory %+v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	args := []string{
+		"-I", "../../",
+		"-I", "../../third_party",
+		"-I", "examples",
+		path.Join(includeSchemaPath, "message.proto"),
+		path.Join(includeSchemaPath, "fieldcollision.proto"),
+		path.Join("examples/tests/bodymapping/", "message.proto"),
+		"--openapi_out=" + tempDir,
+		"--openapi_opt=naming=proto",
+		"--openapi_opt=output_mode=source_relative",
+		"--openapi_opt=include_schema=tests.includeschema.message.v1.Standalone",
+		"--openapi_opt=include_schema=tests.includeschema.fieldcollision.v1.Standalone",
+	}
+	out, err := exec.Command("protoc", args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("protoc %v failed: %+v\n%s", strings.Join(args, " "), err, out)
+	}
+
+	// Each spec has to hold the definition of its own file's Standalone, not
+	// merely a schema under that name: "child" and "other" are the fields that
+	// tell the two apart.
+	for _, tt := range []struct {
+		spec  string
+		field string
+	}{
+		{spec: "tests/includeschema/message.openapi.yaml", field: "child:"},
+		{spec: "tests/includeschema/fieldcollision.openapi.yaml", field: "other:"},
+	} {
+		document, err := os.ReadFile(path.Join(tempDir, tt.spec))
+		if err != nil {
+			t.Fatalf("read %s: %+v", tt.spec, err)
+		}
+		if !strings.Contains(string(document), "Standalone:") {
+			t.Errorf("%s is missing the included schema:\n%s", tt.spec, document)
+		}
+		if !strings.Contains(string(document), tt.field) {
+			t.Errorf("%s holds the wrong Standalone, expected a %q field:\n%s", tt.spec, tt.field, document)
+		}
+	}
+
+	other, err := os.ReadFile(path.Join(tempDir, "tests/bodymapping/message.openapi.yaml"))
+	if err != nil {
+		t.Fatalf("read unrelated spec: %+v", err)
+	}
+	if strings.Contains(string(other), "Standalone:") {
+		t.Errorf("included schema leaked into an unrelated file's spec:\n%s", other)
+	}
+}
+
+// TestOpenAPIIncludeSchemaWellKnownComponent covers the well-known types that
+// are emitted as components rather than inlined. The default error response
+// already puts google.protobuf.Any and google.rpc.Status in the document before
+// the schemas are walked, so requesting one has to be recognised as satisfied
+// rather than reported missing.
+func TestOpenAPIIncludeSchemaWellKnownComponent(t *testing.T) {
+	tempDir := "tmp_include_wk"
+	if err := os.MkdirAll(tempDir, os.ModePerm); err != nil {
+		t.Fatalf("create tmp directory %+v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	args := []string{
+		"-I", "../../",
+		"-I", "../../third_party",
+		"-I", "examples",
+		"examples/tests/protobuftypes/message.proto",
+		"--openapi_out=" + tempDir,
+		"--openapi_opt=include_schema=google.protobuf.Any",
+	}
+	out, err := exec.Command("protoc", args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("protoc %v failed: %+v\n%s", strings.Join(args, " "), err, out)
+	}
+	document, err := os.ReadFile(path.Join(tempDir, TEMP_FILE))
+	if err != nil {
+		t.Fatalf("read generated spec: %+v", err)
+	}
+	if !strings.Contains(string(document), "GoogleProtobufAny:") {
+		t.Errorf("generated spec is missing GoogleProtobufAny:\n%s", document)
+	}
+}
+
+// TestOpenAPIShadowedSchemaName covers two messages that format to the same
+// schema name where only one of them is referenced. The document has to keep the
+// referenced one, whichever file the walk reaches first — under source_relative
+// the unreferenced message is the one declared in the file being generated for.
+func TestOpenAPIShadowedSchemaName(t *testing.T) {
+	tempDir := "tmp_shadowing"
+	if err := os.MkdirAll(tempDir, os.ModePerm); err != nil {
+		t.Fatalf("create tmp directory %+v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	for _, tt := range []struct {
+		name string
+		opts []string
+		spec string
+	}{{
+		name: "Merged",
+		spec: TEMP_FILE,
+	}, {
+		name: "Source relative",
+		opts: []string{"output_mode=source_relative"},
+		spec: "tests/includeschema/shadowing.openapi.yaml",
+	}} {
+		t.Run(tt.name, func(t *testing.T) {
+			outDir := path.Join(tempDir, strings.ReplaceAll(tt.name, " ", "_"))
+			if err := os.MkdirAll(outDir, os.ModePerm); err != nil {
+				t.Fatalf("create out directory %+v", err)
+			}
+			args := []string{
+				"-I", "../../",
+				"-I", "../../third_party",
+				"-I", "examples",
+				path.Join(includeSchemaPath, "shadowing.proto"),
+				"--openapi_out=" + outDir,
+				"--openapi_opt=naming=proto",
+			}
+			for _, opt := range tt.opts {
+				args = append(args, "--openapi_opt="+opt)
+			}
+			out, err := exec.Command("protoc", args...).CombinedOutput()
+			if err != nil {
+				t.Fatalf("protoc %v failed: %+v\n%s", strings.Join(args, " "), err, out)
+			}
+			document, err := os.ReadFile(path.Join(outDir, tt.spec))
+			if err != nil {
+				t.Fatalf("read generated spec: %+v", err)
+			}
+			// "id" is the imported Detached's field, "shadow" the local one's.
+			if !strings.Contains(string(document), "id:") {
+				t.Errorf("spec does not hold the referenced Detached:\n%s", document)
+			}
+			if strings.Contains(string(document), "shadow:") {
+				t.Errorf("spec holds the unreferenced Detached:\n%s", document)
+			}
+		})
 	}
 }
 

@@ -34,6 +34,16 @@ type OpenAPIv3Reflector struct {
 	conf Configuration
 
 	requiredSchemas []string // Names of schemas which are used through references.
+
+	// Proto name of the first message to require each schema name. Two messages
+	// in different packages can format to the same schema name, and only one
+	// definition can be emitted under it; this is the one the references mean.
+	requiredSchemaOwners map[string]string
+
+	// Proto names of the messages that wanted a schema name another message
+	// already owned. Every reference to the name resolves to the owner's
+	// definition, so these are the requests the document cannot honour.
+	schemaNameConflicts map[string][]string
 }
 
 // NewOpenAPIv3Reflector creates a new reflector.
@@ -41,7 +51,9 @@ func NewOpenAPIv3Reflector(conf Configuration) *OpenAPIv3Reflector {
 	return &OpenAPIv3Reflector{
 		conf: conf,
 
-		requiredSchemas: make([]string, 0),
+		requiredSchemas:      make([]string, 0),
+		requiredSchemaOwners: make(map[string]string),
+		schemaNameConflicts:  make(map[string][]string),
 	}
 }
 
@@ -118,6 +130,12 @@ func (r *OpenAPIv3Reflector) schemaReferenceForMessage(message protoreflect.Mess
 	schemaName := r.formatMessageName(message)
 	if !contains(r.requiredSchemas, schemaName) {
 		r.requiredSchemas = append(r.requiredSchemas, schemaName)
+	}
+	fullName := string(message.FullName())
+	if owner, ok := r.requiredSchemaOwners[schemaName]; !ok {
+		r.requiredSchemaOwners[schemaName] = fullName
+	} else if owner != fullName && !contains(r.schemaNameConflicts[schemaName], fullName) {
+		r.schemaNameConflicts[schemaName] = append(r.schemaNameConflicts[schemaName], fullName)
 	}
 	return "#/components/schemas/" + schemaName
 }

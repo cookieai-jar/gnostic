@@ -1,0 +1,44 @@
+// Copyright 2020 Google LLC.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
+syntax = "proto3";
+
+package tests.includeschema.shadowing.v1;
+
+import "google/api/annotations.proto";
+import "tests/includeschema/imported.proto";
+
+option go_package = "github.com/google/gnostic/apps/protoc-gen-openapi/examples/tests/includeschema/shadowing/v1;shadowing";
+
+// Shadowing returns the imported Detached, while declaring a Detached of its own
+// that nothing references. Both format to the schema name "Detached", so the
+// definition the document keeps has to be the one the operation refers to.
+service Shadowing {
+  rpc GetDetached(GetDetachedRequest) returns (tests.includeschema.imported.v1.Detached) {
+    option (google.api.http) = {
+      get : "/v1/shadowing/detached/{id}"
+    };
+  }
+}
+
+message GetDetachedRequest {
+  string id = 1;
+}
+
+// Detached is reached from nothing. Its field name is what tells it apart from
+// the imported message of the same name.
+message Detached {
+  string shadow = 1;
+}
