@@ -1,0 +1,58 @@
+// Copyright 2020 Google LLC.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package tests.oauth2scopes.message.v1;
+
+import "google/api/annotations.proto";
+import "tests/oauth2scopes/options.proto";
+
+option go_package = "github.com/google/gnostic/cmd/protoc-gen-openapi/examples/tests/oauth2scopes/message/v1;message";
+
+service Messaging {
+  // Read a message; requires a single scope.
+  rpc GetMessage(GetMessageRequest) returns (Message) {
+    option (google.api.http) = {get: "/v1/messages/{message_id}"};
+    option (tests.oauth2scopes.auth).oauth2_scopes = "messages:read";
+  }
+
+  // List messages; any-of two scopes.
+  rpc ListMessages(ListMessagesRequest) returns (ListMessagesResponse) {
+    option (google.api.http) = {get: "/v1/messages"};
+    option (tests.oauth2scopes.auth).oauth2_scopes = "messages:read,messages:admin";
+  }
+
+  // No scopes annotation.
+  rpc DeleteMessage(GetMessageRequest) returns (Message) {
+    option (google.api.http) = {delete: "/v1/messages/{message_id}"};
+  }
+}
+
+message GetMessageRequest {
+  string message_id = 1;
+}
+
+message ListMessagesRequest {
+  int32 page_size = 1;
+}
+
+message ListMessagesResponse {
+  repeated Message messages = 1;
+}
+
+message Message {
+  string message_id = 1;
+  string text = 2;
+}

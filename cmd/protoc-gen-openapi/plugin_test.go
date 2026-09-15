@@ -116,6 +116,37 @@ func TestOpenAPIProtobufNaming(t *testing.T) {
 	}
 }
 
+// TestOAuth2Scopes verifies that method-level OAuth2 scopes read from a custom
+// (unlinked) method-option extension become operation tags, any-of security
+// requirements, and a synthesized security scheme.
+func TestOAuth2Scopes(t *testing.T) {
+	const dir = "examples/tests/oauth2scopes/"
+	fixture := path.Join(dir, "openapi_oauth2.yaml")
+	err := exec.Command("protoc",
+		"-I", "../../",
+		"-I", "../../third_party",
+		"-I", "examples",
+		path.Join(dir, "message.proto"),
+		"--openapi_opt=naming=proto",
+		"--openapi_opt=oauth2_scopes_extension=tests.oauth2scopes.auth.oauth2_scopes",
+		"--openapi_opt=oauth2_token_url=https://example.com/oauth/token",
+		"--openapi_opt=oauth2_authorization_url=https://example.com/oauth/authorize",
+		"--openapi_out=.").Run()
+	if err != nil {
+		t.Fatalf("protoc failed: %+v", err)
+	}
+	if GENERATE_FIXTURES {
+		if err := CopyFixture(TEMP_FILE, fixture); err != nil {
+			t.Fatalf("Can't generate fixture: %+v", err)
+		}
+	} else {
+		if err := exec.Command("diff", TEMP_FILE, fixture).Run(); err != nil {
+			t.Fatalf("Diff failed: %+v", err)
+		}
+	}
+	os.Remove(TEMP_FILE)
+}
+
 func TestOpenAPIFQSchemaNaming(t *testing.T) {
 	// create temp directory for source_relative outputs
 	tempDir := "tmp"

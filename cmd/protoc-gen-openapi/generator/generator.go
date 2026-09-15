@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	any_pb "google.golang.org/protobuf/types/known/anypb"
 
 	wk "github.com/google/gnostic/cmd/protoc-gen-openapi/generator/wellknown"
@@ -63,6 +64,15 @@ type Configuration struct {
 	Filename        *string
 	Visibility      VisibilityArray
 	IncludeSchemas  StringArray
+
+	// OAuth2 scopes support. When OAuth2ScopesExtension is set, each method's
+	// scopes are read from that method-option extension and rendered as
+	// operation tags plus OAuth2 security requirements, backed by a single
+	// synthesized security scheme.
+	OAuth2ScopesExtension  *string // "<extension-full-name>.<field-name>", e.g. "auth.oauth2_scopes"
+	OAuth2SchemeName       *string // security scheme name, default "oauth2"
+	OAuth2AuthorizationURL *string
+	OAuth2TokenURL         *string
 }
 
 const (
@@ -90,6 +100,12 @@ type OpenAPIv3Generator struct {
 	linterRulePattern *regexp.Regexp
 	pathPattern       *regexp.Regexp
 	namedPathPattern  *regexp.Regexp
+
+	// Resolved OAuth2 scopes extension (nil when the feature is disabled).
+	scopesExtType   protoreflect.ExtensionType
+	scopesFieldName protoreflect.Name
+	scopesTypes     *protoregistry.Types
+	seenScopes      map[string]bool
 }
 
 // NewOpenAPIv3Generator creates a new generator for a protoc plugin invocation.
@@ -106,6 +122,8 @@ func NewOpenAPIv3Generator(plugin *protogen.Plugin, conf Configuration, inputFil
 		linterRulePattern: regexp.MustCompile(`\(-- .* --\)`),
 		pathPattern:       regexp.MustCompile("{([^=}]+)}"),
 		namedPathPattern:  regexp.MustCompile("{(.+)=(.+)}"),
+
+		seenScopes: make(map[string]bool),
 	}
 }
 
@@ -127,6 +145,10 @@ func (g *OpenAPIv3Generator) Run(outputFile *protogen.GeneratedFile) error {
 
 // buildDocumentV3 builds an OpenAPIv3 document for a plugin request.
 func (g *OpenAPIv3Generator) buildDocumentV3() (*v3.Document, error) {
+	if err := g.resolveScopesExtension(); err != nil {
+		return nil, err
+	}
+
 	d := &v3.Document{}
 
 	d.Openapi = "3.0.3"
@@ -157,6 +179,10 @@ func (g *OpenAPIv3Generator) buildDocumentV3() (*v3.Document, error) {
 			g.addPathsToDocumentV3(d, file.Services)
 		}
 	}
+
+	// Emit the synthesized OAuth2 security scheme for every scope discovered
+	// while walking the operations above.
+	g.addOAuth2SchemeToDocumentV3(d)
 
 	// Seed any schemas the caller asked for explicitly. They are indistinguishable
 	// from a reference discovered above, so the loop below picks them up — and
@@ -191,6 +217,10 @@ func (g *OpenAPIv3Generator) buildDocumentV3() (*v3.Document, error) {
 		}
 		d.Tags[0].Description = ""
 	}
+
+	// Declare each discovered scope as a document tag. Done after the
+	// single-service title inference above so scope tags don't disturb it.
+	g.addOAuth2TagsToDocumentV3(d)
 
 	allServers := []string{}
 
@@ -829,6 +859,8 @@ func (g *OpenAPIv3Generator) addPathsToDocumentV3(d *v3.Document, services []*pr
 					if extOperation != nil {
 						proto.Merge(op, extOperation.(*v3.Operation))
 					}
+
+					g.addOAuth2ScopesToOperationV3(op, method)
 
 					g.addOperationToDocumentV3(d, op, path2, methodName)
 				}

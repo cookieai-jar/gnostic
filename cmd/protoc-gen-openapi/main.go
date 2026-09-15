@@ -45,6 +45,11 @@ func main() {
 		DefaultResponse: flags.Bool("default_response", true, `add default response. If "true", automatically adds a default response to operations which use the google.rpc.Status message. Useful if you use envoy or grpc-gateway to transcode as they use this type for their default error responses.`),
 		OutputMode:      flags.String("output_mode", "merged", `output generation mode. By default, a single openapi.yaml is generated at the out folder. Use "source_relative' to generate a separate '[inputfile].openapi.yaml' next to each '[inputfile].proto'.`),
 		Filename:        flags.String("filename", "openapi.yaml", `name of the output file. Default is "openapi.yaml"`),
+
+		OAuth2ScopesExtension:  flags.String("oauth2_scopes_extension", "", `method-option extension holding comma-separated OAuth2 scopes, as "<extension-full-name>.<field-name>" (e.g. "auth.oauth2_scopes"). When set, scopes are emitted as operation tags and OAuth2 security requirements.`),
+		OAuth2SchemeName:       flags.String("oauth2_scheme_name", "oauth2", `name of the synthesized OAuth2 security scheme`),
+		OAuth2AuthorizationURL: flags.String("oauth2_authorization_url", "", `authorizationUrl for the synthesized OAuth2 scheme. When set, an authorizationCode flow is used; otherwise a clientCredentials flow.`),
+		OAuth2TokenURL:         flags.String("oauth2_token_url", "", `tokenUrl for the synthesized OAuth2 scheme`),
 	}
 	opts := protogen.Options{
 		ParamFunc: flags.Set,
